@@ -10,7 +10,8 @@
     "dry-run": "wrangler deploy --dry-run"
   },
   "dependencies": {
-    "lingva-scraper": "1.1.0"
+    "cheerio": "^1.0.0-rc.12",
+    "lingva-scraper": "^1.1.0"
   },
   "devDependencies": {
     "typescript": "^5.9.3",

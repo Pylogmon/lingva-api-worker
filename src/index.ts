@@ -1,7 +1,6 @@
+import { load } from "cheerio";
 import {
     getTranslationInfo,
-    getTranslationText,
-    getAudio,
     isValidCode,
     LanguageType,
     languageList,
@@ -46,15 +45,6 @@ const toNumberArray = (audio: unknown): number[] | null => {
     return null;
 };
 
-const parseBatchTranslation = (data: unknown): string | null => {
-    const root = data as unknown[][][][][][][];
-    const translation = root?.[1]?.[0]?.[0]?.[5]?.[0]?.[0] as unknown;
-
-    return typeof translation === "string" && translation.trim()
-        ? translation.trim()
-        : null;
-};
-
 const getTranslationTextFallback = async (
     source: LangCode<"source">,
     target: LangCode<"target">,
@@ -62,42 +52,47 @@ const getTranslationTextFallback = async (
 ): Promise<string | null> => {
     const parsedSource = mapGoogleCode(source);
     const parsedTarget = mapGoogleCode(target);
-    const reqData = JSON.stringify([[query, parsedSource, parsedTarget, true], [null]]);
-    const reqBoilerplate = JSON.stringify([[["MkEWBc", reqData, null, "generic"]]]);
-    const body = "f.req=" + encodeURIComponent(reqBoilerplate);
-    const response = await fetch("https://translate.google.com/_/TranslateWebserverUi/data/batchexecute?rpcids=MkEWBc&rt=c", {
-        method: "POST",
+    const encodedQuery = encodeURIComponent(query);
+
+    if (encodedQuery.length > 7500)
+        return null;
+
+    const response = await fetch(`https://translate.google.com/m?sl=${parsedSource}&tl=${parsedTarget}&q=${encodedQuery}`, {
         headers: {
-            "Content-Type": "application/x-www-form-urlencoded",
             "User-Agent": "Mozilla/5.0"
-        },
-        body
+        }
     });
 
     if (!response.ok)
         return null;
 
-    const text = await response.text();
-    const resBoilerplate = JSON.parse(text.split("\n")[3]);
-    const resData = JSON.parse(resBoilerplate?.[0]?.[2]);
+    const html = await response.text();
+    const translation = load(html)(".result-container").text()?.trim();
 
-    return parseBatchTranslation(resData);
+    return translation && !translation.includes("#af-error-page")
+        ? translation
+        : null;
 };
 
 const getAudioFallback = async (
     target: LangCode<"target">,
-    query: string
+    query: string,
+    isSlow = false
 ): Promise<ArrayBuffer | null> => {
+    const lastSpace = query.lastIndexOf(" ", 200);
+    const slicedText = query.slice(0, query.length > 200 && lastSpace !== -1 ? lastSpace : 200);
+    const textLength = slicedText.length;
+    const speed = isSlow ? 0.1 : 1;
+
     const url = new URL("https://translate.google.com/translate_tts");
-    url.searchParams.set("ie", "UTF-8");
-    url.searchParams.set("client", "tw-ob");
     url.searchParams.set("tl", mapGoogleCode(target));
-    url.searchParams.set("q", query);
+    url.searchParams.set("q", slicedText);
+    url.searchParams.set("textlen", String(textLength));
+    url.searchParams.set("speed", String(speed));
+    url.searchParams.set("client", "tw-ob");
 
     const response = await fetch(url, {
         headers: {
-            "Accept": "audio/mpeg,*/*",
-            "Referer": "https://translate.google.com/",
             "User-Agent": "Mozilla/5.0"
         }
     });
@@ -137,8 +132,7 @@ const handleTranslation = async (segments: string[]): Promise<Response> => {
         return json({ error: "Invalid target language" }, 400);
 
     if (source === "audio") {
-        const audio = toNumberArray(await getAudio(target, query))
-            ?? toNumberArray(await getAudioFallback(target, query));
+        const audio = toNumberArray(await getAudioFallback(target, query));
         return audio
             ? json({ audio })
             : json({ error: "An error occurred while retrieving the audio" }, 500);
@@ -147,9 +141,7 @@ const handleTranslation = async (segments: string[]): Promise<Response> => {
     if (!isValidCode(source, LanguageType.SOURCE))
         return json({ error: "Invalid source language" }, 400);
 
-    const translation = await getTranslationText(source, target, query)
-        || await getTranslationTextFallback(source, target, query);
-
+    const translation = await getTranslationTextFallback(source, target, query);
     if (!translation)
         return json({ error: "An error occurred while retrieving the translation" }, 500);
 
