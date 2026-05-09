@@ -84,6 +84,34 @@ const getTranslationTextFallback = async (
     return parseBatchTranslation(resData);
 };
 
+const getAudioFallback = async (
+    target: LangCode<"target">,
+    query: string
+): Promise<ArrayBuffer | null> => {
+    const url = new URL("https://translate.google.com/translate_tts");
+    url.searchParams.set("ie", "UTF-8");
+    url.searchParams.set("client", "tw-ob");
+    url.searchParams.set("tl", mapGoogleCode(target));
+    url.searchParams.set("q", query);
+
+    const response = await fetch(url, {
+        headers: {
+            "Accept": "audio/mpeg,*/*",
+            "Referer": "https://translate.google.com/",
+            "User-Agent": "Mozilla/5.0"
+        }
+    });
+
+    if (!response.ok)
+        return null;
+
+    const contentType = response.headers.get("Content-Type") ?? "";
+    if (!contentType.toLowerCase().includes("audio"))
+        return null;
+
+    return response.arrayBuffer();
+};
+
 const handleLanguages = (segments: string[]): Response => {
     if (segments.length > 1)
         return json({ error: "Not Found" }, 404);
@@ -109,7 +137,8 @@ const handleTranslation = async (segments: string[]): Promise<Response> => {
         return json({ error: "Invalid target language" }, 400);
 
     if (source === "audio") {
-        const audio = toNumberArray(await getAudio(target, query));
+        const audio = toNumberArray(await getAudio(target, query))
+            ?? toNumberArray(await getAudioFallback(target, query));
         return audio
             ? json({ audio })
             : json({ error: "An error occurred while retrieving the audio" }, 500);
